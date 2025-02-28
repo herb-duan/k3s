@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,12 +46,12 @@ func Test_UnitHandlers(t *testing.T) {
 
 	genericFailures := []sub{
 		{
-			name: "anonymous",
+			name: "000 anonymous",
 			match: func(_ *config.Control) types.GomegaMatcher {
 				return HaveHTTPStatus(http.StatusForbidden)
 			},
 		}, {
-			name: "bad basic",
+			name: "001 bad basic",
 			prepare: func(control *config.Control, req *http.Request) {
 				req.SetBasicAuth("server", control.AgentToken)
 			},
@@ -58,7 +59,7 @@ func Test_UnitHandlers(t *testing.T) {
 				return HaveHTTPStatus(http.StatusUnauthorized)
 			},
 		}, {
-			name: "valid cert but untrusted CA",
+			name: "002 valid cert but untrusted CA",
 			prepare: func(control *config.Control, req *http.Request) {
 				withNewClientCert(req, control.Runtime.ServerCA, control.Runtime.ServerCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 					CommonName:   "system:node:" + control.ServerNodeName,
@@ -70,7 +71,7 @@ func Test_UnitHandlers(t *testing.T) {
 				return HaveHTTPStatus(http.StatusUnauthorized)
 			},
 		}, {
-			name: "valid cert but no RBAC",
+			name: "003 valid cert but no RBAC",
 			prepare: func(control *config.Control, req *http.Request) {
 				withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 					CommonName:   "system:monitoring",
@@ -106,7 +107,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/serving-kubelet.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic but missing headers",
+							name: "100 valid basic but missing headers",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -115,7 +116,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but missing headers",
+							name: "101 valid cert but missing headers",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -128,7 +129,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but wrong node name",
+							name: "102 valid cert but wrong node name",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -143,7 +144,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but nonexistent node",
+							name: "103 valid cert but nonexistent node",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", "nonexistent")
 								req.Header.Add("k3s-Node-Password", "password")
@@ -158,18 +159,21 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic legacy key",
+							name: "104 valid basic legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
 								req.SetBasicAuth("node", control.AgentToken)
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(ContainSubstring("PRIVATE KEY")),
+								)
 							},
 						},
 						sub{
-							name: "valid cert legacy key",
+							name: "105 valid cert legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -180,16 +184,19 @@ func Test_UnitHandlers(t *testing.T) {
 								})
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(ContainSubstring("PRIVATE KEY")),
+								)
 							},
 						},
 						sub{
-							name: "valid basic legacy key deferred local password",
+							name: "106 valid basic legacy key deferred local password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
 								req.SetBasicAuth("node", control.AgentToken)
-								withLocalClient(req)
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
 								return And(
@@ -199,7 +206,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert legacy key deferred local password",
+							name: "107 valid cert legacy key deferred local password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -208,7 +215,7 @@ func Test_UnitHandlers(t *testing.T) {
 									Organization: []string{user.NodesGroup},
 									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 								})
-								withLocalClient(req)
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
 								return And(
@@ -218,7 +225,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic different node",
+							name: "108 valid basic different node",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", "k3s-agent-1")
 								req.Header.Add("k3s-Node-Password", "password")
@@ -229,7 +236,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic bad node password",
+							name: "109 valid basic bad node password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", "k3s-agent-1")
 								req.Header.Add("k3s-Node-Password", "invalid-password")
@@ -245,7 +252,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/serving-kubelet.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic client key but bad password",
+							name: "200 valid basic client key but bad password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -253,11 +260,14 @@ func Test_UnitHandlers(t *testing.T) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(Not(ContainSubstring("PRIVATE KEY"))),
+								)
 							},
 						},
 						sub{
-							name: "valid cert client key",
+							name: "201 valid cert client key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -269,43 +279,17 @@ func Test_UnitHandlers(t *testing.T) {
 								})
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(Not(ContainSubstring("PRIVATE KEY"))),
+								)
 							},
 						},
 						sub{
-							name: "valid basic client key but bad password",
+							name: "203 valid basic client key but bad password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "invalid-password")
-								withCertificateRequest(req)
-								req.SetBasicAuth("node", control.AgentToken)
-							},
-							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
-							},
-						},
-						sub{
-							name: "valid cert client key but bad password",
-							prepare: func(control *config.Control, req *http.Request) {
-								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
-								req.Header.Add("k3s-Node-Password", "invalid-password")
-								withCertificateRequest(req)
-								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
-									CommonName:   "system:node:" + control.ServerNodeName,
-									Organization: []string{user.NodesGroup},
-									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-								})
-							},
-							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
-							},
-						},
-						sub{
-							name: "valid basic client key but bad deferred local password",
-							prepare: func(control *config.Control, req *http.Request) {
-								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
-								req.Header.Add("k3s-Node-Password", "invalid-password")
-								withLocalClient(req)
 								withCertificateRequest(req)
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -314,11 +298,295 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert client key but bad deferred local password",
+							name: "204 valid cert client key but bad password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "invalid-password")
-								withLocalClient(req)
+								withCertificateRequest(req)
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:" + control.ServerNodeName,
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusForbidden)
+							},
+						},
+						sub{
+							name: "205 valid basic client key but bad deferred local password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
+								withCertificateRequest(req)
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusForbidden)
+							},
+						},
+						sub{
+							name: "206 valid cert client key but bad deferred local password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
+								withCertificateRequest(req)
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:" + control.ServerNodeName,
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusForbidden)
+							},
+						},
+					),
+				},
+			},
+		},
+		{
+			//*** tests with runtime core not ready and bind address set ***
+			name: "no runtime core with bind-address",
+			controlFunc: func(t *testing.T) (*config.Control, context.CancelFunc) {
+				control, cancel := getCorelessControl(t)
+				control.BindAddress = "192.0.2.100"
+				return control, cancel
+			},
+			paths: []pathTest{
+				//** paths accessible with node cert or agent token, and specific headers **
+				{
+					method: http.MethodGet,
+					path:   "/v1-k3s/serving-kubelet.crt",
+					subs: append(genericFailures,
+						sub{
+							name: "300 valid basic but missing headers",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusBadRequest)
+							},
+						},
+						sub{
+							name: "301 valid cert but missing headers",
+							prepare: func(control *config.Control, req *http.Request) {
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:" + control.ServerNodeName,
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusBadRequest)
+							},
+						},
+						sub{
+							name: "302 valid cert but wrong node name",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "password")
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:k3s-agent-1",
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusBadRequest)
+							},
+						},
+						sub{
+							name: "303 valid cert but nonexistent node",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", "nonexistent")
+								req.Header.Add("k3s-Node-Password", "password")
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:nonexistent",
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusServiceUnavailable)
+							},
+						},
+						sub{
+							name: "304 valid basic legacy key",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "password")
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(ContainSubstring("PRIVATE KEY")),
+								)
+							},
+						},
+						sub{
+							name: "305 valid cert legacy key",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "password")
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:" + control.ServerNodeName,
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(ContainSubstring("PRIVATE KEY")),
+								)
+							},
+						},
+						sub{
+							name: "306 valid basic legacy key deferred local password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "password")
+								req.SetBasicAuth("node", control.AgentToken)
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(ContainSubstring("PRIVATE KEY")),
+								)
+							},
+						},
+						sub{
+							name: "307 valid cert legacy key deferred local password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "password")
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:" + control.ServerNodeName,
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(ContainSubstring("PRIVATE KEY")),
+								)
+							},
+						},
+						sub{
+							name: "308 valid basic different node",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", "k3s-agent-1")
+								req.Header.Add("k3s-Node-Password", "password")
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusServiceUnavailable)
+							},
+						},
+						sub{
+							name: "309 valid basic bad node password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", "k3s-agent-1")
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusServiceUnavailable)
+							},
+						},
+					),
+				}, {
+					method: http.MethodPost,
+					path:   "/v1-k3s/serving-kubelet.crt",
+					subs: append(genericFailures,
+						sub{
+							name: "400 valid basic client key but bad password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "password")
+								withCertificateRequest(req)
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(Not(ContainSubstring("PRIVATE KEY"))),
+								)
+							},
+						},
+						sub{
+							name: "401 valid cert client key",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "password")
+								withCertificateRequest(req)
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:" + control.ServerNodeName,
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(Not(ContainSubstring("PRIVATE KEY"))),
+								)
+							},
+						},
+						sub{
+							name: "402 valid basic client key but bad password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								withCertificateRequest(req)
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusForbidden)
+							},
+						},
+						sub{
+							name: "403 valid cert client key but bad password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								withCertificateRequest(req)
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:" + control.ServerNodeName,
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusForbidden)
+							},
+						},
+						sub{
+							name: "404 valid basic client key but bad deferred local password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
+								withCertificateRequest(req)
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return HaveHTTPStatus(http.StatusForbidden)
+							},
+						},
+						sub{
+							name: "405 valid cert client key but bad deferred local password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
 								withCertificateRequest(req)
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -345,7 +613,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/serving-kubelet.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic but missing headers",
+							name: "500 valid basic but missing headers",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -354,7 +622,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but missing headers",
+							name: "501 valid cert but missing headers",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -367,7 +635,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but wrong node name",
+							name: "502 valid cert but wrong node name",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -382,7 +650,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but nonexistent node",
+							name: "503 valid cert but nonexistent node",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", "nonexistent")
 								req.Header.Add("k3s-Node-Password", "password")
@@ -397,18 +665,21 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic legacy key",
+							name: "504 valid basic legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
 								req.SetBasicAuth("node", control.AgentToken)
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(ContainSubstring("PRIVATE KEY")),
+								)
 							},
 						},
 						sub{
-							name: "valid cert legacy key",
+							name: "505 valid cert legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -419,16 +690,19 @@ func Test_UnitHandlers(t *testing.T) {
 								})
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(ContainSubstring("PRIVATE KEY")),
+								)
 							},
 						},
 						sub{
-							name: "valid basic legacy key deferred local password",
+							name: "506 valid basic legacy key deferred local password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
 								req.SetBasicAuth("node", control.AgentToken)
-								withLocalClient(req)
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
 								return And(
@@ -438,7 +712,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert legacy key deferred local password",
+							name: "507 valid cert legacy key deferred local password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -447,7 +721,7 @@ func Test_UnitHandlers(t *testing.T) {
 									Organization: []string{user.NodesGroup},
 									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 								})
-								withLocalClient(req)
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
 							},
 							match: func(_ *config.Control) types.GomegaMatcher {
 								return And(
@@ -457,7 +731,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic different node",
+							name: "508 valid basic different node",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", "k3s-agent-1")
 								req.Header.Add("k3s-Node-Password", "password")
@@ -468,7 +742,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic bad node password",
+							name: "509 valid basic bad node password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", "k3s-agent-1")
 								req.Header.Add("k3s-Node-Password", "invalid-password")
@@ -484,67 +758,10 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/serving-kubelet.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic client key but bad password",
+							name: "600 valid basic client key but bad password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
-								withCertificateRequest(req)
-								req.SetBasicAuth("node", control.AgentToken)
-							},
-							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
-							},
-						},
-						sub{
-							name: "valid cert client key",
-							prepare: func(control *config.Control, req *http.Request) {
-								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
-								req.Header.Add("k3s-Node-Password", "password")
-								withCertificateRequest(req)
-								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
-									CommonName:   "system:node:" + control.ServerNodeName,
-									Organization: []string{user.NodesGroup},
-									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-								})
-							},
-							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
-							},
-						},
-						sub{
-							name: "valid basic client key but bad password",
-							prepare: func(control *config.Control, req *http.Request) {
-								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
-								req.Header.Add("k3s-Node-Password", "invalid-password")
-								withCertificateRequest(req)
-								req.SetBasicAuth("node", control.AgentToken)
-							},
-							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
-							},
-						},
-						sub{
-							name: "valid cert client key but bad password",
-							prepare: func(control *config.Control, req *http.Request) {
-								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
-								req.Header.Add("k3s-Node-Password", "invalid-password")
-								withCertificateRequest(req)
-								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
-									CommonName:   "system:node:" + control.ServerNodeName,
-									Organization: []string{user.NodesGroup},
-									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-								})
-							},
-							match: func(_ *config.Control) types.GomegaMatcher {
-								return HaveHTTPStatus(http.StatusServiceUnavailable)
-							},
-						},
-						sub{
-							name: "valid basic client key but bad deferred local password",
-							prepare: func(control *config.Control, req *http.Request) {
-								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
-								req.Header.Add("k3s-Node-Password", "invalid-password")
-								withLocalClient(req)
 								withCertificateRequest(req)
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -556,11 +773,80 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert client key but bad deferred local password",
+							name: "601 valid cert client key",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "password")
+								withCertificateRequest(req)
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:" + control.ServerNodeName,
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(Not(ContainSubstring("PRIVATE KEY"))),
+								)
+							},
+						},
+						sub{
+							name: "602 valid basic client key but bad password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "invalid-password")
-								withLocalClient(req)
+								withCertificateRequest(req)
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(Not(ContainSubstring("PRIVATE KEY"))),
+								)
+							},
+						},
+						sub{
+							name: "603 valid cert client key but bad password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								withCertificateRequest(req)
+								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
+									CommonName:   "system:node:" + control.ServerNodeName,
+									Organization: []string{user.NodesGroup},
+									Usages:       []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+								})
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(Not(ContainSubstring("PRIVATE KEY"))),
+								)
+							},
+						},
+						sub{
+							name: "604 valid basic client key but bad deferred local password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
+								withCertificateRequest(req)
+								req.SetBasicAuth("node", control.AgentToken)
+							},
+							match: func(_ *config.Control) types.GomegaMatcher {
+								return And(
+									HaveHTTPStatus(http.StatusOK),
+									HaveHTTPBody(Not(ContainSubstring("PRIVATE KEY"))),
+								)
+							},
+						},
+						sub{
+							name: "605 valid cert client key but bad deferred local password",
+							prepare: func(control *config.Control, req *http.Request) {
+								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
+								req.Header.Add("k3s-Node-Password", "invalid-password")
+								withClientAddress(req, control.BindAddressOrLoopback(false, false))
 								withCertificateRequest(req)
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -590,7 +876,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/serving-kubelet.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic but missing headers",
+							name: "700 valid basic but missing headers",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -599,7 +885,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but missing headers",
+							name: "701 valid cert but missing headers",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -612,7 +898,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but wrong node name",
+							name: "702 valid cert but wrong node name",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -627,7 +913,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but nonexistent node",
+							name: "703 valid cert but nonexistent node",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", "nonexistent")
 								req.Header.Add("k3s-Node-Password", "password")
@@ -642,7 +928,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic legacy key",
+							name: "704 valid basic legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -656,7 +942,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert legacy key",
+							name: "705 valid cert legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -674,7 +960,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic different node",
+							name: "706 valid basic different node",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", "k3s-agent-1")
 								req.Header.Add("k3s-Node-Password", "password")
@@ -688,7 +974,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic bad node password",
+							name: "707 valid basic bad node password",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", "k3s-agent-1")
 								req.Header.Add("k3s-Node-Password", "invalid-password")
@@ -706,7 +992,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/serving-kubelet.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic client key",
+							name: "800 valid basic client key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -721,7 +1007,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert client key",
+							name: "801 valid cert client key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -745,7 +1031,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/client-kubelet.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic but missing headers",
+							name: "900 valid basic but missing headers",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -754,7 +1040,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert but missing headers",
+							name: "901 valid cert but missing headers",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -767,7 +1053,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid basic legacy key",
+							name: "902 valid basic legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -781,7 +1067,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert legacy key",
+							name: "903 valid cert legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -804,7 +1090,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/client-kubelet.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic client key",
+							name: "A00 valid basic client key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -819,7 +1105,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert client key",
+							name: "A01 valid cert client key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.Header.Add("k3s-Node-Name", control.ServerNodeName)
 								req.Header.Add("k3s-Node-Password", "password")
@@ -845,7 +1131,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/client-kube-proxy.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic legacy key",
+							name: "B00 valid basic legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -857,7 +1143,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert legacy key",
+							name: "B01 valid cert legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -878,7 +1164,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/client-kube-proxy.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic client key",
+							name: "C00 valid basic client key",
 							prepare: func(control *config.Control, req *http.Request) {
 								withCertificateRequest(req)
 								req.SetBasicAuth("node", control.AgentToken)
@@ -891,7 +1177,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert client key",
+							name: "C01 valid cert client key",
 							prepare: func(control *config.Control, req *http.Request) {
 								withCertificateRequest(req)
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
@@ -913,7 +1199,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/client-k3s-controller.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic legacy key",
+							name: "D00 valid basic legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -925,7 +1211,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert legacy key",
+							name: "D01 valid cert legacy key",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -946,7 +1232,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/client-k3s-controller.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic client key",
+							name: "E00 valid basic client key",
 							prepare: func(control *config.Control, req *http.Request) {
 								withCertificateRequest(req)
 								req.SetBasicAuth("node", control.AgentToken)
@@ -959,7 +1245,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert client key",
+							name: "E01 valid cert client key",
 							prepare: func(control *config.Control, req *http.Request) {
 								withCertificateRequest(req)
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
@@ -981,7 +1267,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/client-ca.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "F00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -994,7 +1280,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert",
+							name: "F01 valid cert",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -1016,7 +1302,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/server-ca.crt",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "G00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -1029,7 +1315,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert",
+							name: "G01 valid cert",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -1051,7 +1337,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/apiservers",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "G00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -1063,7 +1349,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert",
+							name: "G01 valid cert",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -1084,7 +1370,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/config",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "H00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -1096,7 +1382,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert",
+							name: "H01 valid cert",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -1117,7 +1403,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/readyz",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "I00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("node", control.AgentToken)
 							},
@@ -1129,7 +1415,7 @@ func Test_UnitHandlers(t *testing.T) {
 							},
 						},
 						sub{
-							name: "valid cert",
+							name: "I01 valid cert",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -1152,7 +1438,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/connect",
 					subs: append(genericFailures,
 						sub{
-							name: "valid cert",
+							name: "J00 valid cert",
 							prepare: func(control *config.Control, req *http.Request) {
 								withNewClientCert(req, control.Runtime.ClientCA, control.Runtime.ClientCAKey, control.Runtime.ClientKubeletKey, certutil.Config{
 									CommonName:   "system:node:" + control.ServerNodeName,
@@ -1172,7 +1458,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/encrypt/status",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "K00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("server", control.Token)
 							},
@@ -1186,7 +1472,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/encrypt/config",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "L00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("server", control.Token)
 							},
@@ -1200,7 +1486,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/cert/cacerts",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "M00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("server", control.Token)
 							},
@@ -1214,7 +1500,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/server-bootstrap",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "N00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("server", control.Token)
 							},
@@ -1231,7 +1517,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/v1-k3s/token",
 					subs: append(genericFailures,
 						sub{
-							name: "valid basic",
+							name: "O00 valid basic",
 							prepare: func(control *config.Control, req *http.Request) {
 								req.SetBasicAuth("server", control.Token)
 							},
@@ -1247,7 +1533,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/",
 					subs: append(genericFailures,
 						sub{
-							name: "valid cert",
+							name: "P00 valid cert",
 							prepare: func(control *config.Control, req *http.Request) {
 								withClientCert(req, control.Runtime.ClientKubeAPICert)
 							},
@@ -1263,7 +1549,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/ping",
 					subs: []sub{
 						{
-							name: "anonymous",
+							name: "Q00 anonymous",
 							match: func(_ *config.Control) types.GomegaMatcher {
 								return And(
 									HaveHTTPStatus(http.StatusOK),
@@ -1277,7 +1563,7 @@ func Test_UnitHandlers(t *testing.T) {
 					path:   "/cacerts",
 					subs: []sub{
 						{
-							name: "anonymous",
+							name: "R00 anonymous",
 							match: func(control *config.Control) types.GomegaMatcher {
 								certs, _ := os.ReadFile(control.Runtime.ServerCA)
 								return And(
@@ -1493,6 +1779,6 @@ func withCertificateRequest(req *http.Request) {
 	req.Body = io.NopCloser(bytes.NewReader(csr))
 }
 
-func withLocalClient(req *http.Request) {
-	req.RemoteAddr = "127.0.0.1:0"
+func withClientAddress(req *http.Request, address string) {
+	req.RemoteAddr = net.JoinHostPort(address, "1234")
 }

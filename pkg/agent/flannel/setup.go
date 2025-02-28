@@ -48,8 +48,7 @@ const (
 
 	wireguardNativeBackend = `{
 	"Type": "wireguard",
-	"PersistentKeepaliveInterval": %PersistentKeepaliveInterval%,
-	"Mode": "%Mode%"
+	"PersistentKeepaliveInterval": 25
 }`
 
 	emptyIPv6Network = "::/0"
@@ -69,14 +68,21 @@ func Prepare(ctx context.Context, nodeConfig *config.Node) error {
 func Run(ctx context.Context, nodeConfig *config.Node) error {
 	logrus.Infof("Starting flannel with backend %s", nodeConfig.FlannelBackend)
 
-	if err := util.WaitForRBACReady(ctx, nodeConfig.AgentConfig.KubeConfigK3sController, util.DefaultAPIServerReadyTimeout, authorizationv1.ResourceAttributes{
-		Verb:     "list",
-		Resource: "nodes",
-	}, ""); err != nil {
-		return errors.Wrap(err, "flannel failed to wait for RBAC")
+	kubeConfig := nodeConfig.AgentConfig.KubeConfigKubelet
+	resourceAttrs := authorizationv1.ResourceAttributes{Verb: "list", Resource: "nodes"}
+
+	// Compatibility code for AuthorizeNodeWithSelectors feature-gate.
+	// If the kubelet cannot list nodes, then wait for the k3s-controller RBAC to become ready, and use that kubeconfig instead.
+	if canListNodes, err := util.CheckRBAC(ctx, kubeConfig, resourceAttrs, ""); err != nil {
+		return errors.Wrap(err, "failed to check if RBAC allows node list")
+	} else if !canListNodes {
+		kubeConfig = nodeConfig.AgentConfig.KubeConfigK3sController
+		if err := util.WaitForRBACReady(ctx, kubeConfig, util.DefaultAPIServerReadyTimeout, resourceAttrs, ""); err != nil {
+			return errors.Wrap(err, "flannel failed to wait for RBAC")
+		}
 	}
 
-	coreClient, err := util.GetClientSet(nodeConfig.AgentConfig.KubeConfigK3sController)
+	coreClient, err := util.GetClientSet(kubeConfig)
 	if err != nil {
 		return err
 	}
@@ -90,7 +96,7 @@ func Run(ctx context.Context, nodeConfig *config.Node) error {
 		return errors.Wrap(err, "failed to check netMode for flannel")
 	}
 	go func() {
-		err := flannel(ctx, nodeConfig.FlannelIface, nodeConfig.FlannelConfFile, nodeConfig.AgentConfig.KubeConfigK3sController, nodeConfig.FlannelIPv6Masq, netMode)
+		err := flannel(ctx, nodeConfig.FlannelIface, nodeConfig.FlannelConfFile, kubeConfig, nodeConfig.FlannelIPv6Masq, netMode)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			logrus.Errorf("flannel exited: %v", err)
 			os.Exit(1)
@@ -203,7 +209,6 @@ func createFlannelConf(nodeConfig *config.Node) error {
 	}
 
 	var backendConf string
-	backendOptions := make(map[string]string)
 
 	// precheck and error out unsupported flannel backends.
 	switch nodeConfig.FlannelBackend {
@@ -234,16 +239,7 @@ func createFlannelConf(nodeConfig *config.Node) error {
 		}
 		backendConf = strings.ReplaceAll(tailscaledBackend, "%Routes%", routes)
 	case config.FlannelBackendWireguardNative:
-		mode, ok := backendOptions["Mode"]
-		if !ok {
-			mode = "separate"
-		}
-		keepalive, ok := backendOptions["PersistentKeepaliveInterval"]
-		if !ok {
-			keepalive = "25"
-		}
-		backendConf = strings.ReplaceAll(wireguardNativeBackend, "%Mode%", mode)
-		backendConf = strings.ReplaceAll(backendConf, "%PersistentKeepaliveInterval%", keepalive)
+		backendConf = wireguardNativeBackend
 	default:
 		return fmt.Errorf("Cannot configure unknown flannel backend '%s'", nodeConfig.FlannelBackend)
 	}

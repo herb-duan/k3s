@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/k3s-io/k3s/tests"
+	"github.com/k3s-io/k3s/tests/docker"
 	tester "github.com/k3s-io/k3s/tests/docker"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -28,8 +30,8 @@ var _ = Describe("Boostrap Token Tests", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(config.ProvisionServers(1)).To(Succeed())
 			Eventually(func() error {
-				return tester.DeploymentsReady([]string{"coredns", "local-path-provisioner", "metrics-server", "traefik"}, config.KubeconfigFile)
-			}, "60s", "5s").Should(Succeed())
+				return tests.CheckDeployments([]string{"coredns", "local-path-provisioner", "metrics-server", "traefik"}, config.KubeconfigFile)
+			}, "120s", "5s").Should(Succeed())
 		})
 	})
 
@@ -37,19 +39,19 @@ var _ = Describe("Boostrap Token Tests", Ordered, func() {
 		var newSecret string
 		It("creates a bootstrap token", func() {
 			var err error
-			newSecret, err = tester.RunCmdOnDocker(config.Servers[0].Name, "k3s token create --ttl=5m --description=Test")
+			newSecret, err = config.Servers[0].RunCmdOnNode("k3s token create --ttl=5m --description=Test")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(newSecret).NotTo(BeEmpty())
 		})
 		It("joins the agent with the new tokens", func() {
 			newSecret = strings.ReplaceAll(newSecret, "\n", "")
-			config.Secret = newSecret
+			config.Token = newSecret
 			Expect(config.ProvisionAgents(1)).To(Succeed())
 			Eventually(func(g Gomega) {
-				nodes, err := tester.ParseNodes(config.KubeconfigFile)
+				nodes, err := tests.ParseNodes(config.KubeconfigFile)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(nodes).To(HaveLen(2))
-				g.Expect(tester.NodesReady(config.KubeconfigFile)).To(Succeed())
+				g.Expect(tests.NodesReady(config.KubeconfigFile, config.GetNodeNames())).To(Succeed())
 			}, "40s", "5s").Should(Succeed())
 		})
 	})
@@ -61,6 +63,10 @@ var _ = AfterEach(func() {
 })
 
 var _ = AfterSuite(func() {
+	if failed {
+		AddReportEntry("describe", docker.DescribeNodesAndPods(config))
+		AddReportEntry("docker-logs", docker.TailDockerLogs(1000, append(config.Servers, config.Agents...)))
+	}
 	if config != nil && !failed {
 		config.Cleanup()
 	}

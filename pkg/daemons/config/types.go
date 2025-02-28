@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/k3s-io/k3s/pkg/generated/controllers/k3s.cattle.io"
+	"github.com/k3s-io/api/pkg/generated/controllers/k3s.cattle.io"
 	"github.com/k3s-io/kine/pkg/endpoint"
 	"github.com/rancher/wharfie/pkg/registries"
 	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
@@ -72,6 +72,7 @@ type EtcdS3 struct {
 	Proxy         string          `json:"proxy,omitempty"`
 	Region        string          `json:"region,omitempty"`
 	SecretKey     string          `json:"secretKey,omitempty"`
+	SessionToken  string          `json:"sessionToken,omitempty"`
 	Insecure      bool            `json:"insecure,omitempty"`
 	SkipSSLVerify bool            `json:"skipSSLVerify,omitempty"`
 	Timeout       metav1.Duration `json:"timeout,omitempty"`
@@ -92,6 +93,7 @@ type Containerd struct {
 	NonrootDevices bool
 	SELinux        bool
 	Debug          bool
+	ConfigVersion  int
 }
 
 type CRIDockerd struct {
@@ -310,7 +312,6 @@ type ControlRuntimeBootstrap struct {
 type ControlRuntime struct {
 	ControlRuntimeBootstrap
 
-	HTTPBootstrap                        bool
 	APIServerReady                       <-chan struct{}
 	ContainerRuntimeReady                <-chan struct{}
 	ETCDReady                            <-chan struct{}
@@ -340,6 +341,7 @@ type ControlRuntime struct {
 	AgentToken         string
 	APIServer          http.Handler
 	Handler            http.Handler
+	HTTPBootstrap      http.Handler
 	Tunnel             http.Handler
 	Authenticator      authenticator.Request
 

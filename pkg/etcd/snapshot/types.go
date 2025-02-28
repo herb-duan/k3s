@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	k3s "github.com/k3s-io/k3s/pkg/apis/k3s.cattle.io/v1"
+	k3s "github.com/k3s-io/api/k3s.cattle.io/v1"
 	"github.com/k3s-io/k3s/pkg/daemons/config"
 	"github.com/k3s-io/k3s/pkg/version"
 	"github.com/minio/minio-go/v7"
@@ -47,6 +47,7 @@ type S3Config struct {
 	// Mask these fields in the embedded struct to avoid serializing their values in the snapshotFile record
 	AccessKey    string          `json:"accessKey,omitempty"`
 	ConfigSecret string          `json:"configSecret,omitempty"`
+	SessionToken string          `json:"sessionToken,omitempty"`
 	Proxy        string          `json:"proxy,omitempty"`
 	SecretKey    string          `json:"secretKey,omitempty"`
 	Timeout      metav1.Duration `json:"timeout,omitempty"`

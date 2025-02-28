@@ -101,6 +101,7 @@ type Server struct {
 	EtcdS3SkipSSLVerify      bool
 	EtcdS3AccessKey          string
 	EtcdS3SecretKey          string
+	EtcdS3SessionToken       string
 	EtcdS3BucketName         string
 	EtcdS3Region             string
 	EtcdS3Folder             string
@@ -397,7 +398,7 @@ var ServerFlags = []cli.Flag{
 	},
 	&cli.StringFlag{
 		Name:        "etcd-snapshot-dir",
-		Usage:       "(db) Directory to save db snapshots. (default: ${data-dir}/db/snapshots)",
+		Usage:       "(db) Directory to save db snapshots. (default: ${data-dir}/server/db/snapshots)",
 		Destination: &ServerConfig.EtcdSnapshotDir,
 	},
 	&cli.BoolFlag{
@@ -437,6 +438,12 @@ var ServerFlags = []cli.Flag{
 		Usage:       "(db) S3 secret key",
 		EnvVar:      "AWS_SECRET_ACCESS_KEY",
 		Destination: &ServerConfig.EtcdS3SecretKey,
+	},
+	&cli.StringFlag{
+		Name:        "etcd-s3-session-token",
+		Usage:       "(db) S3 session token",
+		EnvVar:      "AWS_SESSION_TOKEN",
+		Destination: &ServerConfig.EtcdS3SessionToken,
 	},
 	&cli.StringFlag{
 		Name:        "etcd-s3-bucket",
